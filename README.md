@@ -32,7 +32,7 @@ Download `Awake.app` from [Releases](../../releases) and move to `/Applications`
 ```bash
 git clone https://github.com/aaajiao/awake.git
 cd awake
-swiftc -o Awake.app/Contents/MacOS/Awake main.swift -framework SwiftUI -framework AppKit -parse-as-library
+./build.sh
 open Awake.app
 ```
 
@@ -55,11 +55,11 @@ The app requests administrator privileges via AppleScript when applying changes.
 
 ## Tech Stack
 
-- **Swift 6** + **SwiftUI**
-- **MenuBarExtra** for menu bar integration
+- **Swift 6** + **SwiftUI** + **AppKit**
+- **NSPanel** for arrowless menu bar popover
 - **@Observable** for state management
 - **SMAppService** for login item management
-- Single-file architecture (~500 lines)
+- Multi-file modular architecture
 
 ## License
 
