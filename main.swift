@@ -28,14 +28,31 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
     static func save(_ lang: AppLanguage) {
         UserDefaults.standard.set(lang.rawValue, forKey: "appLanguage")
-        L10n.current = L10n.forLanguage(lang)
+    }
+}
+
+// MARK: - Localization State (Observable for real-time updates)
+@Observable
+final class LocalizationState {
+    static let shared = LocalizationState()
+
+    var current: L10n
+    var language: AppLanguage {
+        didSet {
+            AppLanguage.save(language)
+            current = L10n.forLanguage(language)
+        }
+    }
+
+    private init() {
+        let lang = AppLanguage.saved
+        self.language = lang
+        self.current = L10n.forLanguage(lang)
     }
 }
 
 // MARK: - Localization
 struct L10n {
-    static var current: L10n = forLanguage(AppLanguage.saved)
-
     let sleepTime: String
     let wakeTime: String
     let timedWake: String
@@ -79,7 +96,7 @@ struct L10n {
         systemDetails: "系统调度详情...",
         launchAtLogin: "开机自动启动",
         language: "语言",
-        quit: "退出",
+        quit: "退出 Awake",
         stayAwake: "电脑保持唤醒",
         sleepPrefix: "睡眠",
         wakePrefix: "唤醒",
@@ -103,7 +120,7 @@ struct L10n {
         systemDetails: "System Schedule Details...",
         launchAtLogin: "Launch at Login",
         language: "Language",
-        quit: "Quit",
+        quit: "Quit Awake",
         stayAwake: "Computer Stays Awake",
         sleepPrefix: "Sleep",
         wakePrefix: "Wake",
@@ -134,8 +151,8 @@ enum RepeatDays: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var displayName: String {
-        L10n.current.daysDisplay(rawValue)
+    func displayName(_ l: L10n) -> String {
+        l.daysDisplay(rawValue)
     }
 }
 
@@ -214,7 +231,7 @@ final class ScheduleState {
     var sleepTimePmset: String { String(format: "%02d:%02d:00", sleepHour, sleepMinute) }
     var wakeTimePmset: String { String(format: "%02d:%02d:00", wakeHour, wakeMinute) }
 
-    var menuBarIcon: NSImage {
+    func menuBarIcon() -> NSImage {
         let name = hasActiveSchedule ? "sleep" : "awake"
         let executablePath = Bundle.main.executablePath ?? ""
         let resourcesPath = (executablePath as NSString).deletingLastPathComponent + "/../Resources"
@@ -323,10 +340,34 @@ enum LaunchService {
     }
 }
 
-// MARK: - Views
-struct StatusHeaderView: View {
-    let state: ScheduleState
-    let l = L10n.current
+// MARK: - App Icon View
+struct AppIconView: View {
+    var body: some View {
+        let executablePath = Bundle.main.executablePath ?? ""
+        let resourcesPath = (executablePath as NSString).deletingLastPathComponent + "/../Resources"
+        let iconPath = "\(resourcesPath)/AppIcon.icns"
+
+        if let icon = NSImage(contentsOfFile: iconPath) {
+            Image(nsImage: icon)
+                .resizable()
+                .frame(width: 32, height: 32)
+        } else {
+            Image(systemName: "moon.circle.fill")
+                .resizable()
+                .frame(width: 32, height: 32)
+                .foregroundStyle(.blue)
+        }
+    }
+}
+
+// MARK: - Popover Content View
+struct PopoverContentView: View {
+    @Bindable var state: ScheduleState
+    @Bindable var localization: LocalizationState
+    @State private var launchAtLogin = LaunchService.isEnabled
+    let onIconUpdate: () -> Void
+
+    var l: L10n { localization.current }
 
     private var statusText: String {
         let sleepTime = state.systemSchedule.sleepTime ?? state.sleepTimeDisplay
@@ -338,162 +379,322 @@ struct StatusHeaderView: View {
     }
 
     var body: some View {
-        if state.hasActiveSchedule {
-            Text(statusText)
-            Text(l.daysDisplay(state.systemSchedule.days ?? state.days.rawValue))
-        } else {
-            Text(l.stayAwake)
-        }
-    }
-}
-
-struct TimePickerMenu: View {
-    @Binding var selectedHour: Int
-    let onSelect: () -> Void
-
-    var body: some View {
-        ForEach(0..<24, id: \.self) { hour in
-            Button(String(format: "%02d:00", hour)) {
-                selectedHour = hour
-                onSelect()
-            }
-        }
-    }
-}
-
-struct MenuContent: View {
-    @Bindable var state: ScheduleState
-    @State private var launchAtLogin = LaunchService.isEnabled
-    @State private var currentLanguage = AppLanguage.saved
-    @State private var showingAlert = false
-    @State private var alertMessage = ""
-    let onLanguageChange: () -> Void
-
-    var l: L10n { L10n.current }
-
-    var body: some View {
-        // Status Header
-        StatusHeaderView(state: state)
-
-        Divider()
-
-        // Sleep Time
-        Menu("\(l.sleepTime): \(state.sleepTimeDisplay)") {
-            TimePickerMenu(selectedHour: $state.sleepHour) {
-                state.save()
-                if state.hasActiveSchedule {
-                    PMSetService.applySchedule(state)
+        VStack(alignment: .leading, spacing: 10) {
+            // App Header with Icon
+            HStack(spacing: 10) {
+                AppIconView()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Awake")
+                        .font(.headline)
+                    if state.hasActiveSchedule {
+                        Text(statusText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(l.stayAwake)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                Spacer()
             }
-        }
+            .padding(.bottom, 4)
 
-        // Timed Wake Toggle
-        Toggle(l.timedWake, isOn: $state.wakeEnabled)
-            .onChange(of: state.wakeEnabled) { _, _ in
-                state.save()
-                if state.hasActiveSchedule {
-                    PMSetService.applySchedule(state)
+            Divider()
+
+            // Sleep Time Picker
+            HStack {
+                Text(l.sleepTime)
+                Spacer()
+                Picker("", selection: $state.sleepHour) {
+                    ForEach(0..<24, id: \.self) { hour in
+                        Text(String(format: "%02d:00", hour)).tag(hour)
+                    }
                 }
-            }
-
-        // Wake Time (only if enabled)
-        if state.wakeEnabled {
-            Menu("\(l.wakeTime): \(state.wakeTimeDisplay)") {
-                TimePickerMenu(selectedHour: $state.wakeHour) {
+                .labelsHidden()
+                .frame(width: 80)
+                .onChange(of: state.sleepHour) { _, _ in
                     state.save()
                     if state.hasActiveSchedule {
                         PMSetService.applySchedule(state)
+                        onIconUpdate()
                     }
                 }
             }
-        } else {
-            Text(l.wolNote)
-        }
 
-        // Repeat Days
-        Menu("\(l.repeatLabel): \(state.days.displayName)") {
-            ForEach(RepeatDays.allCases) { day in
-                Button(day.displayName) {
-                    state.days = day
+            // Timed Wake Toggle
+            Toggle(l.timedWake, isOn: $state.wakeEnabled)
+                .onChange(of: state.wakeEnabled) { _, _ in
                     state.save()
                     if state.hasActiveSchedule {
                         PMSetService.applySchedule(state)
+                        onIconUpdate()
+                    }
+                }
+
+            // Wake Time (conditional)
+            if state.wakeEnabled {
+                HStack {
+                    Text(l.wakeTime)
+                    Spacer()
+                    Picker("", selection: $state.wakeHour) {
+                        ForEach(0..<24, id: \.self) { hour in
+                            Text(String(format: "%02d:00", hour)).tag(hour)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 80)
+                    .onChange(of: state.wakeHour) { _, _ in
+                        state.save()
+                        if state.hasActiveSchedule {
+                            PMSetService.applySchedule(state)
+                            onIconUpdate()
+                        }
+                    }
+                }
+            } else {
+                Text(l.wolNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Repeat Days
+            HStack {
+                Text(l.repeatLabel)
+                Spacer()
+                Picker("", selection: $state.days) {
+                    ForEach(RepeatDays.allCases) { day in
+                        Text(day.displayName(l)).tag(day)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 100)
+                .onChange(of: state.days) { _, _ in
+                    state.save()
+                    if state.hasActiveSchedule {
+                        PMSetService.applySchedule(state)
+                        onIconUpdate()
                     }
                 }
             }
-        }
 
-        Divider()
+            Divider()
 
-        // Main Action Button
-        if state.hasActiveSchedule {
-            Button("⏸ \(l.pauseSchedule)") {
-                PMSetService.cancelSchedule(state)
-            }
-        } else {
-            Button("▶ \(l.enableSchedule)") {
-                PMSetService.applySchedule(state)
-            }
-        }
-
-        Divider()
-
-        // Launch at Login
-        Toggle(l.launchAtLogin, isOn: $launchAtLogin)
-            .onChange(of: launchAtLogin) { _, newValue in
-                LaunchService.setEnabled(newValue)
-            }
-
-        // Language
-        Menu("\(l.language): \(currentLanguage.displayName)") {
-            ForEach(AppLanguage.allCases) { lang in
-                Button(lang.displayName) {
-                    currentLanguage = lang
-                    AppLanguage.save(lang)
-                    onLanguageChange()
+            // Main Action Button
+            Button {
+                if state.hasActiveSchedule {
+                    PMSetService.cancelSchedule(state)
+                } else {
+                    PMSetService.applySchedule(state)
                 }
+                onIconUpdate()
+            } label: {
+                HStack {
+                    Text(state.hasActiveSchedule ? "⏸ \(l.pauseSchedule)" : "▶ \(l.enableSchedule)")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(state.hasActiveSchedule ? .orange : .blue)
+
+            Divider()
+
+            // Settings Section
+            Toggle(l.launchAtLogin, isOn: $launchAtLogin)
+                .onChange(of: launchAtLogin) { _, newValue in
+                    LaunchService.setEnabled(newValue)
+                }
+
+            HStack {
+                Text(l.language)
+                Spacer()
+                Picker("", selection: $localization.language) {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Text(lang.displayName).tag(lang)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 120)
+            }
+
+            Button(l.systemDetails) {
+                let output = PMSetService.readScheduleOutput()
+                let message = output.isEmpty ? l.noSystemSchedule : output
+                let alert = NSAlert()
+                alert.messageText = l.systemDetails
+                alert.informativeText = message
+                alert.runModal()
+            }
+            .buttonStyle(.link)
+
+            Divider()
+
+            // Footer: Version + Quit
+            HStack {
+                Text("Awake 0.4")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(l.quit)
+                        Text("⌘Q")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
         }
-
-        // System Details
-        Button(l.systemDetails) {
-            let output = PMSetService.readScheduleOutput()
-            alertMessage = output.isEmpty ? l.noSystemSchedule : output
-            showAlert(title: l.systemDetails, message: alertMessage)
-        }
-
-        Divider()
-
-        // Quit
-        Button(l.quit) {
-            NSApplication.shared.terminate(nil)
-        }
-        .keyboardShortcut("q")
-    }
-
-    private func showAlert(title: String, message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.runModal()
+        .padding()
+        .frame(width: 280)
+        .fixedSize()
+        .background(.regularMaterial)
     }
 }
 
-// MARK: - App
+// MARK: - Panel Window (no arrow, flush with menu bar)
+class PopoverPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+
+    init(contentRect: NSRect) {
+        super.init(
+            contentRect: contentRect,
+            styleMask: [.nonactivatingPanel, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        isFloatingPanel = true
+        level = .popUpMenu
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+    }
+}
+
+// MARK: - App Delegate
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var statusItem: NSStatusItem?
+    var panel: PopoverPanel?
+    var state = ScheduleState()
+    var localization = LocalizationState.shared
+    var hostingController: NSHostingController<PopoverContentView>?
+    var eventMonitor: Any?
+    var localEventMonitor: Any?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        setupStatusItem()
+        setupPanel()
+        setupEventMonitor()
+    }
+
+    func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
+        if let button = statusItem?.button {
+            button.image = state.menuBarIcon()
+            button.action = #selector(togglePanel)
+            button.target = self
+        }
+    }
+
+    func setupPanel() {
+        let contentView = PopoverContentView(
+            state: state,
+            localization: localization
+        ) { [weak self] in
+            self?.updateIcon()
+        }
+
+        hostingController = NSHostingController(rootView: contentView)
+
+        // Create panel with initial size
+        panel = PopoverPanel(contentRect: NSRect(x: 0, y: 0, width: 280, height: 400))
+        panel?.contentViewController = hostingController
+    }
+
+    func setupEventMonitor() {
+        // Global monitor for clicks outside the app
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.closePanel()
+        }
+
+        // Local monitor for escape key
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { // Escape key
+                self?.closePanel()
+                return nil
+            }
+            return event
+        }
+    }
+
+    func updateIcon() {
+        statusItem?.button?.image = state.menuBarIcon()
+    }
+
+    func closePanel() {
+        panel?.orderOut(nil)
+    }
+
+    @objc func togglePanel() {
+        guard let panel = panel, let button = statusItem?.button, let window = button.window else { return }
+
+        if panel.isVisible {
+            closePanel()
+        } else {
+            // Refresh state before showing
+            state.syncWithSystem()
+            updateIcon()
+
+            // Update content view
+            let contentView = PopoverContentView(
+                state: state,
+                localization: localization
+            ) { [weak self] in
+                self?.updateIcon()
+            }
+            hostingController?.rootView = contentView
+
+            // Calculate position: flush below menu bar, centered on button
+            let buttonRect = button.convert(button.bounds, to: nil)
+            let screenRect = window.convertToScreen(buttonRect)
+
+            // Get content size
+            let contentSize = hostingController?.view.fittingSize ?? NSSize(width: 280, height: 400)
+
+            // Position: top of panel at bottom of menu bar, centered on button
+            let x = screenRect.midX - contentSize.width / 2
+            let y = screenRect.minY - contentSize.height
+
+            panel.setContentSize(contentSize)
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+            panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    deinit {
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = localEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+}
+
+// MARK: - App Entry Point
 @main
-struct AwakeApp: App {
-    @State private var state = ScheduleState()
-    @State private var refreshID = UUID()
-
-    var body: some Scene {
-        MenuBarExtra {
-            MenuContent(state: state) {
-                refreshID = UUID()
-            }
-            .id(refreshID)
-        } label: {
-            Image(nsImage: state.menuBarIcon)
-        }
-        .menuBarExtraStyle(.menu)
+struct AwakeApp {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.run()
     }
 }

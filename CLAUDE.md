@@ -14,7 +14,7 @@ swiftc -o Awake.app/Contents/MacOS/Awake main.swift -framework SwiftUI -framewor
 
 ## Architecture
 
-**Single-file SwiftUI app** (`main.swift` ~500 lines) with these components:
+**Single-file hybrid AppKit/SwiftUI app** (`main.swift` ~700 lines) with these components:
 
 | Section | Purpose |
 |---------|---------|
@@ -23,8 +23,10 @@ swiftc -o Awake.app/Contents/MacOS/Awake main.swift -framework SwiftUI -framewor
 | `ScheduleState` | `@Observable` state management |
 | `PMSetService` | Executes `pmset` commands via AppleScript for admin privileges |
 | `LaunchService` | `SMAppService` for login item management |
-| `MenuContent` + Views | SwiftUI menu bar UI |
-| `AwakeApp` | `@main` entry with `MenuBarExtra` |
+| `PopoverContentView` | SwiftUI content for the panel |
+| `PopoverPanel` | Custom `NSPanel` subclass for menu bar popup (no arrow, flush with menu bar) |
+| `AppDelegate` | `NSStatusItem` + panel management |
+| `AwakeApp` | `@main` entry point using `NSApplication.run()` |
 
 ## Key Technical Details
 
@@ -32,6 +34,8 @@ swiftc -o Awake.app/Contents/MacOS/Awake main.swift -framework SwiftUI -framewor
 - **Admin privileges**: Uses AppleScript `do shell script ... with administrator privileges` for pmset commands
 - **Icon switching**: `sleep.icns` (schedule active) / `awake.icns` (schedule inactive) loaded from Resources
 - **No Xcode project**: Compiled directly with `swiftc`, app bundle manually structured
+- **Custom NSPanel**: Uses `PopoverPanel` (NSPanel subclass) instead of NSPopover to achieve flush positioning below menu bar without arrow
+- **Event monitors**: Global monitor closes panel on outside clicks; local monitor handles Escape key
 
 ## App Bundle Structure
 
