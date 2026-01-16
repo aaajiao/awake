@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Build
+*.o
+*.dSYM/
+
+# Compiled binary (keep app bundle structure, ignore binary)
+Awake.app/Contents/MacOS/Awake
